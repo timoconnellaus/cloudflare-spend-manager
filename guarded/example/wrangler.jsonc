@@ -1,0 +1,17 @@
+// A throwaway Worker used only by tests: test/guarded.test.ts runs it locally and
+// test/live/guarded.live.test.ts deploys it, then deletes it.
+{
+  "name": "spend-guard-runawaytest",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "374784ce2915a597adcecf9bcb2c5ee6",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      { "name": "RUNAWAY", "class_name": "Runaway" },
+      { "name": "RUNAWAY_AGENT", "class_name": "RunawayAgent" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Runaway", "RunawayAgent"] }]
+}
