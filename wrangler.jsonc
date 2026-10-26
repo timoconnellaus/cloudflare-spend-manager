@@ -16,7 +16,10 @@
   "send_email": [{ "name": "EMAIL" }],
   "vars": {
     "GUARD_SCRIPT": "spend-guard",
-    "CF_ACCOUNT_ID": "374784ce2915a597adcecf9bcb2c5ee6"
+    "CF_ACCOUNT_ID": "374784ce2915a597adcecf9bcb2c5ee6",
+    "ACCESS_TEAM_DOMAIN": "timoconnellaus.cloudflareaccess.com",
+    "ACCESS_AUD": "8e93195611327156f8641b0f5b0738e1b2b87e18e13c4760448ac3b1940f6f4c",
+    "PUBLIC_URL": "https://spend-guard.tim-oconnell-australia.workers.dev"
   }
-  // Secrets: CF_API_TOKEN. Vars set after Access is configured: ACCESS_TEAM_DOMAIN, ACCESS_AUD, PUBLIC_URL.
+  // Secrets: CF_API_TOKEN.
 }
