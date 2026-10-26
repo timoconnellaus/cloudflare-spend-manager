@@ -19,7 +19,6 @@ export type Config = {
 
 export type Snapshot = {
   takenAt: string;
-  labels: Record<string, string>;
   workers: { name: string; hasContainers: boolean; bindings: string[] }[];
 };
 
@@ -93,6 +92,53 @@ export class Store {
     const now = new Date().toISOString();
     const stmt = this.db.prepare("INSERT INTO baselines (resource, metric, peak, hours, updated_at) VALUES (?, ?, ?, ?, ?)");
     await this.db.batch([this.db.prepare("DELETE FROM baselines"), ...rows.map((r) => stmt.bind(r.resource, r.metric, r.peak, r.hours, now))]);
+  }
+
+  async historyIsEmpty(): Promise<boolean> {
+    return !(await this.db.prepare("SELECT 1 FROM history LIMIT 1").first());
+  }
+
+  async upsertHistory(rows: { resource: string; metric: string; hour: string; value: number }[]) {
+    // D1 allows 100 bound parameters per statement: 25 rows of 4.
+    const statements = [];
+    for (let i = 0; i < rows.length; i += 25) {
+      const chunk = rows.slice(i, i + 25);
+      statements.push(
+        this.db
+          .prepare(`INSERT INTO history (resource, metric, hour, value) VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")} ON CONFLICT (resource, metric, hour) DO UPDATE SET value = excluded.value`)
+          .bind(...chunk.flatMap((r) => [r.resource, r.metric, r.hour, r.value])),
+      );
+    }
+    for (let i = 0; i < statements.length; i += 100) await this.db.batch(statements.slice(i, i + 100));
+  }
+
+  async pruneHistory(days: number) {
+    await this.db.prepare("DELETE FROM history WHERE hour < ?").bind(new Date(Date.now() - days * 86400_000).toISOString()).run();
+  }
+
+  /** Each resource's peak hour since `since`, and how many hours it has been observed. */
+  async peaksSince(since: Date, until: Date) {
+    const { results } = await this.db
+      .prepare("SELECT resource, metric, max(value) AS peak, min(hour) AS first FROM history WHERE hour >= ? AND hour < ? GROUP BY resource, metric")
+      .bind(since.toISOString(), until.toISOString())
+      .all<{ resource: string; metric: string; peak: number; first: string }>();
+    return results.map((r) => ({ resource: r.resource, metric: r.metric, peak: r.peak, hours: Math.floor((until.getTime() - Date.parse(r.first)) / 3600_000) }));
+  }
+
+  async history(resource: string) {
+    return (await this.db.prepare("SELECT metric, hour, value FROM history WHERE resource = ? ORDER BY hour").bind(resource).all<{ metric: string; hour: string; value: number }>()).results;
+  }
+
+  async upsertLabels(labels: Record<string, string>) {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare("INSERT INTO labels (resource, label, last_seen) VALUES (?, ?, ?) ON CONFLICT (resource) DO UPDATE SET label = excluded.label, last_seen = excluded.last_seen");
+    const entries = Object.entries(labels);
+    for (let i = 0; i < entries.length; i += 100) await this.db.batch(entries.slice(i, i + 100).map(([k, v]) => stmt.bind(k, v, now)));
+  }
+
+  async labels(): Promise<Record<string, string>> {
+    const { results } = await this.db.prepare("SELECT resource, label FROM labels").all<{ resource: string; label: string }>();
+    return Object.fromEntries(results.map((r) => [r.resource, r.label]));
   }
 
   async replaceReadings(rows: { resource: string; metric: string; value: number; limit: number; basis: string }[]) {

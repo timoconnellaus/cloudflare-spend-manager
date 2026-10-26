@@ -3,7 +3,7 @@ import { accessEmail } from "./access";
 import { checkActivity, checkBilling, manualKill, refreshBaselines, undoKill, type Env } from "./guard";
 import { METRICS } from "./meters";
 import { Store } from "./store";
-import { Dashboard } from "./ui";
+import { Dashboard, History } from "./ui";
 
 type Vars = { user: string };
 
@@ -22,13 +22,14 @@ app.use("*", async (c, next) => {
 
 app.get("/", async (c) => {
   const store = new Store(c.env.DB);
-  const [config, protectedKeys, readings, kills, events, declarations] = await Promise.all([
+  const [config, protectedKeys, readings, kills, events, declarations, labels] = await Promise.all([
     store.config(),
     store.protectedKeys(),
     store.readings(),
     store.kills(),
     store.events(),
     store.listDeclarations(),
+    store.labels(),
   ]);
   return c.html(
     <Dashboard
@@ -41,9 +42,17 @@ app.get("/", async (c) => {
       events={events}
       declarations={declarations}
       metrics={METRICS}
+      labels={labels}
       emailBound={!!c.env.EMAIL}
     />,
   );
+});
+
+app.get("/history", async (c) => {
+  const store = new Store(c.env.DB);
+  const resource = c.req.query("resource") ?? "";
+  const [rows, labels] = await Promise.all([store.history(resource), store.labels()]);
+  return c.html(<History resource={resource} label={labels[resource] ?? resource} rows={rows} known={labels} />);
 });
 
 const form = async (c: { req: { parseBody: () => Promise<Record<string, unknown>> } }) =>

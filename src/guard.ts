@@ -23,6 +23,7 @@ const HOUR = 3600_000;
 /** GraphQL Analytics lags by a few minutes; reading up to now would undercount the latest hour. */
 const ANALYTICS_LAG = 5 * 60_000;
 const BASELINE_DAYS = 7;
+const HISTORY_DAYS = 90;
 
 const fmt = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : n.toFixed(0));
 
@@ -61,39 +62,37 @@ export async function checkActivity(env: Env) {
   await act(env, breaches, "activity");
 }
 
-/** Hourly: each resource's highest hourly total over the past week, and how long it has been observed. */
+/**
+ * Hourly: records the latest hours of activity in the guard's own history, then derives each resource's
+ * baseline (its peak hour over the past week) from that history. The first run backfills a week.
+ */
 export async function refreshBaselines(env: Env) {
   const { api, store } = services(env);
-  const now = Date.now();
-  const end = new Date(Math.floor(now / HOUR) * HOUR);
-  const days = await Promise.all(
-    Array.from({ length: BASELINE_DAYS }, (_, i) =>
-      measure(api.gql, api.accountId, new Date(end.getTime() - (i + 1) * 24 * HOUR), new Date(end.getTime() - i * 24 * HOUR), true),
-    ),
+  const end = new Date(Math.floor(Date.now() / HOUR) * HOUR);
+  // GraphQL keeps revising the latest hours for a few minutes, so recent hours are re-recorded each run.
+  const days = (await store.historyIsEmpty()) ? BASELINE_DAYS : 3 / 24;
+  const chunks = await Promise.all(
+    Array.from({ length: Math.ceil(days) }, (_, i) => {
+      const chunkEnd = new Date(end.getTime() - i * 24 * HOUR);
+      const chunkStart = new Date(Math.max(chunkEnd.getTime() - 24 * HOUR, end.getTime() - days * 24 * HOUR));
+      return measure(api.gql, api.accountId, chunkStart, chunkEnd, true);
+    }),
   );
-  const stats = new Map<string, { resource: string; metric: string; peak: number; first: number }>();
-  for (const s of days.flat()) {
-    const resource = keyOf({ product: s.product, id: s.id });
-    const k = `${resource}|${s.metric}`;
-    const hour = Date.parse(s.hour!);
-    const cur = stats.get(k) ?? { resource, metric: s.metric, peak: 0, first: hour };
-    cur.peak = Math.max(cur.peak, s.value);
-    cur.first = Math.min(cur.first, hour);
-    stats.set(k, cur);
-  }
-  await store.replaceBaselines([...stats.values()].map((s) => ({ ...s, hours: Math.floor((end.getTime() - s.first) / HOUR) })));
+  await store.upsertHistory(chunks.flat().map((s) => ({ resource: keyOf({ product: s.product, id: s.id }), metric: s.metric, hour: s.hour!, value: s.value })));
+  await store.pruneHistory(HISTORY_DAYS);
+  await store.replaceBaselines(await store.peaksSince(new Date(end.getTime() - BASELINE_DAYS * 24 * HOUR), end));
 
   const [workers, names] = await Promise.all([inventory(api), labels(api)]);
+  await store.upsertLabels({ ...names, ...Object.fromEntries(workers.map((w) => [`workers:${w.name}`, w.name])) });
   await store.setConfig({
     snapshot: {
       takenAt: new Date().toISOString(),
-      labels: names,
       workers: workers.map((w) => ({ name: w.name, hasContainers: w.hasContainers, bindings: w.bindings.map(keyOf) })),
     },
   });
 }
 
-/** Hourly: the Billable Usage API is authoritative but lags a day or two; it caught the 2026-10 incident when GraphQL could not. */
+/** Hourly: the Billable Usage API covers every product and keeps charges after a Worker is deleted, but lags a day or two. */
 export async function checkBilling(env: Env) {
   const { api, store } = services(env);
   const [rows, config] = await Promise.all([api.request<UsageRow[]>("/billable-usage"), store.config()]);

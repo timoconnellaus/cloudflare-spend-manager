@@ -12,6 +12,7 @@ type Props = {
   events: { id: number; at: string; kind: string; message: string }[];
   declarations: { resource: string; metric: string; hourly_peak: number; note: string | null; created_at: string }[];
   metrics: Metric[];
+  labels: Record<string, string>;
   emailBound: boolean;
 };
 
@@ -43,6 +44,7 @@ button { font:inherit; padding:4px 10px; border-radius:6px; border:1px solid var
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { color:var(--bad); }
 input, select { font:inherit; padding:5px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); max-width:100%; }
 .row { display:flex; flex-wrap:wrap; gap:8px; align-items:end; } .row label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted); }
+a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
 .notice { border-left:3px solid var(--warn); padding:8px 12px; background:var(--card); margin-bottom:12px; border-radius:6px; }
 `;
 
@@ -57,9 +59,68 @@ const Post: FC<{ action: string; fields?: Record<string, string>; label: string;
   </form>
 );
 
+const Page: FC<{ title: string; children?: any }> = ({ title, children }) => (
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>{title}</title>
+      <style>{CSS}</style>
+    </head>
+    <body>
+      <main>{children}</main>
+    </body>
+  </html>
+);
+
+/** A resource's hourly record from the guard's own history, which outlives Cloudflare's analytics for deleted Workers. */
+export const History: FC<{ resource: string; label: string; rows: { metric: string; hour: string; value: number }[]; known: Record<string, string> }> = (p) => {
+  const byMetric = new Map<string, { metric: string; hour: string; value: number }[]>();
+  for (const r of p.rows) byMetric.set(r.metric, [...(byMetric.get(r.metric) ?? []), r]);
+  return (
+    <Page title="Spend Guard history">
+      <header>
+        <div>
+          <h1>{p.label}</h1>
+          <div class="muted small"><a href="/">← Dashboard</a> · {p.resource} · hourly activity kept for 90 days, even after the resource is deleted</div>
+        </div>
+        <form method="get" action="/history" class="row">
+          <input name="resource" list="known" value={p.resource} size={40} />
+          <datalist id="known">{Object.entries(p.known).map(([k, v]) => <option value={k}>{v}</option>)}</datalist>
+          <button>Show</button>
+        </form>
+      </header>
+      {!p.rows.length && <p class="muted">No history recorded for this resource.</p>}
+      {[...byMetric].map(([metric, rows]) => {
+        const days = new Map<string, { total: number; peak: number; peakHour: string }>();
+        for (const r of rows) {
+          const d = days.get(r.hour.slice(0, 10)) ?? { total: 0, peak: 0, peakHour: "" };
+          d.total += r.value;
+          if (r.value >= d.peak) Object.assign(d, { peak: r.value, peakHour: r.hour.slice(11, 16) });
+          days.set(r.hour.slice(0, 10), d);
+        }
+        const max = Math.max(...[...days.values()].map((d) => d.total), 1);
+        return (
+          <section class="card">
+            <h2>{metric}</h2>
+            <table>
+              <thead><tr><th>Day</th><th class="num">Total</th><th></th><th class="num">Peak hour</th></tr></thead>
+              <tbody>
+                {[...days].reverse().map(([day, d]) => (
+                  <tr><td>{day}</td><td class="num">{fmt(d.total)}</td><td style="width:40%"><div class="bar"><span style={`width:${((d.total / max) * 100).toFixed(0)}%`} /></div></td><td class="num">{fmt(d.peak)} at {d.peakHour}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        );
+      })}
+    </Page>
+  );
+};
+
 export const Dashboard: FC<Props> = (p) => {
   const { config } = p;
-  const label = (key: string) => config.snapshot?.labels[key] ?? key;
+  const label = (key: string) => p.labels[key] ?? key;
   const armed = config.mode === "armed";
   const summary = config.billingSummary;
   const families = summary ? Object.entries(summary.families).sort((a, b) => b[1].monthToDate - a[1].monthToDate) : [];
@@ -152,7 +213,7 @@ export const Dashboard: FC<Props> = (p) => {
               <tbody>
                 {p.readings.slice(0, 30).map((r) => (
                   <tr>
-                    <td>{label(r.resource)}<div class="small muted">{r.resource.split(":")[0]}</div></td>
+                    <td><a href={`/history?resource=${encodeURIComponent(r.resource)}`}>{label(r.resource)}</a><div class="small muted">{r.resource.split(":")[0]}</div></td>
                     <td class="small">{r.metric}</td>
                     <td class="num">{fmt(r.value)}</td>
                     <td class="num">{fmt(r.limit)}</td>
