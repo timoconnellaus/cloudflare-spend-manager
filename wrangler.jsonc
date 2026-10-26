@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "spend-guard",
+  "main": "src/index.tsx",
+  "compatibility_date": "2026-10-01",
+  "account_id": "374784ce2915a597adcecf9bcb2c5ee6",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "triggers": {
+    // Activity check every 5 minutes; baselines and billing hourly.
+    "crons": ["*/5 * * * *", "7 * * * *"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "spend-guard", "database_id": "e0844dd5-d5e5-4f5b-b3f2-6f1c8fb4b7c0", "migrations_dir": "migrations" }
+  ],
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": {
+    "GUARD_SCRIPT": "spend-guard",
+    "CF_ACCOUNT_ID": "374784ce2915a597adcecf9bcb2c5ee6"
+  }
+  // Secrets: CF_API_TOKEN. Vars set after Access is configured: ACCESS_TEAM_DOMAIN, ACCESS_AUD, PUBLIC_URL.
+}
